@@ -302,8 +302,15 @@ pub const Face = struct {
 
         // Determine whether this is a color glyph.
         const is_color = self.isColorGlyph(glyph_index);
-        // And whether it's (probably) a bitmap (sbix).
-        const sbix = is_color and self.color != null and self.color.?.sbix;
+        // And whether THIS glyph is a bitmap (sbix). We check the specific
+        // glyph, not just the table's presence — mixed fonts ship sbix data
+        // for emoji glyphs alongside outline-only monochrome glyphs.
+        const sbix = is_color and sbix: {
+            const state = self.color orelse break :sbix false;
+            const table = state.sbix orelse break :sbix false;
+            const glyph_u16 = std.math.cast(u16, glyph_index) orelse break :sbix false;
+            break :sbix table.hasGlyph(glyph_u16);
+        };
 
         // If we're rendering a synthetic bold then we will gain 50% of
         // the line width on every edge, which means we should increase
@@ -890,10 +897,22 @@ pub const Face = struct {
 /// The state associated with a font face that may have colorized glyphs.
 /// This is used to determine if a specific glyph ID is colorized.
 const ColorState = struct {
-    /// True if there is an sbix font table. For now, the mere presence
-    /// of an sbix font table causes us to assume the glyph is colored.
-    /// We can improve this later.
-    sbix: bool,
+    /// Parsed sbix table (if any). We consult this per-glyph rather than
+    /// treating every glyph in a sbix-having font as colored — fonts can
+    /// ship a small color emoji subset (e.g. a single ✅) alongside a much
+    /// larger set of monochrome outlines, and routing the monochrome glyphs
+    /// through the color rasterizer caused them to render incorrectly (and
+    /// in some cases entirely invisible) because the atlas color depth and
+    /// the per-glyph data didn't agree.
+    sbix: ?opentype.SBIX,
+    sbix_data: ?*macos.foundation.Data,
+
+    /// True if the sbix table covers EVERY glyph in the font. macOS bitmap
+    /// emoji fonts like Apple Color Emoji are uniformly bitmap, and a
+    /// per-glyph hasGlyph() call would be unnecessary work in that case.
+    /// When this is true we short-circuit `isColorGlyph` to `true` without
+    /// consulting the offset array.
+    sbix_covers_all: bool,
 
     /// The SVG font table data (if any), which we can use to determine
     /// if a glyph is present in the SVG table.
@@ -903,14 +922,57 @@ const ColorState = struct {
     pub const Error = error{InvalidSVGTable};
 
     pub fn init(f: *macos.text.Font) Error!ColorState {
-        // sbix is true if the table exists in the font data at all.
-        // In the future we probably want to actually parse it and
-        // check for glyphs.
-        const sbix: bool = sbix: {
+        // Read the sbix table if present and parse it so we can answer
+        // per-glyph "is this colored?" questions instead of treating every
+        // glyph in the font as colored. The cost of holding onto the table
+        // data is small; we only release on deinit.
+        const sbix: ?struct {
+            parsed: opentype.SBIX,
+            data: *macos.foundation.Data,
+            covers_all: bool,
+        } = sbix: {
             const tag = macos.text.FontTableTag.init("sbix");
-            const data = f.copyTable(tag) orelse break :sbix false;
-            data.release();
-            break :sbix data.getLength() > 0;
+            const data = f.copyTable(tag) orelse break :sbix null;
+            errdefer data.release();
+            const ptr = data.getPointer();
+            const len = data.getLength();
+            if (len == 0) {
+                data.release();
+                break :sbix null;
+            }
+
+            const num_glyphs: u16 = @intCast(@min(
+                f.getGlyphCount(),
+                std.math.maxInt(u16),
+            ));
+
+            const parsed = opentype.SBIX.init(ptr[0..len], num_glyphs) catch {
+                // A malformed sbix table is treated as "no sbix" rather
+                // than as a font-wide failure: CoreText's own drawing path
+                // will still pick up bitmaps it can read directly, and
+                // falling back to monochrome rendering for unknown-color
+                // glyphs is safer than aborting font loading.
+                data.release();
+                break :sbix null;
+            };
+
+            // Detect the common case of bitmap-only emoji fonts where every
+            // single glyph has sbix data. When this holds, future per-glyph
+            // checks can short-circuit.
+            var covers_all = true;
+            var i: u16 = 0;
+            while (i < num_glyphs) : (i += 1) {
+                if (!parsed.hasGlyph(i)) {
+                    covers_all = false;
+                    break;
+                }
+            }
+
+            break :sbix .{
+                .parsed = parsed,
+                .data = data,
+                .covers_all = covers_all,
+            };
         };
 
         // Read the SVG table out of the font data.
@@ -938,13 +1000,16 @@ const ColorState = struct {
         };
 
         return .{
-            .sbix = sbix,
+            .sbix = if (sbix) |v| v.parsed else null,
+            .sbix_data = if (sbix) |v| v.data else null,
+            .sbix_covers_all = if (sbix) |v| v.covers_all else false,
             .svg = if (svg) |v| v.svg else null,
             .svg_data = if (svg) |v| v.data else null,
         };
     }
 
     pub fn deinit(self: *const ColorState) void {
+        if (self.sbix_data) |v| v.release();
         if (self.svg_data) |v| v.release();
     }
 
@@ -955,8 +1020,16 @@ const ColorState = struct {
         // into it it must be false.
         const glyph_u16 = std.math.cast(u16, glyph_id) orelse return false;
 
-        // sbix is always true for now
-        if (self.sbix) return true;
+        // If the font is uniformly bitmap (e.g. Apple Color Emoji), every
+        // glyph is colored and we don't need to consult the offset table.
+        if (self.sbix_covers_all) return true;
+
+        // For mixed fonts (some glyphs colored, others not — like Gridfit
+        // Mono shipping one ✅ alongside monochrome ⓘ, ☑, etc.) we look
+        // up the specific glyph in the sbix offsets array.
+        if (self.sbix) |sbix| {
+            if (sbix.hasGlyph(glyph_u16)) return true;
+        }
 
         // if we have svg data, check it
         if (self.svg) |svg| {
