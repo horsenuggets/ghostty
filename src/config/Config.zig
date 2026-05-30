@@ -332,6 +332,22 @@ language: ?[:0]const u8 = null,
 /// Note: This only applies to text copying operations, not URL copying.
 @"clipboard-codepoint-map": RepeatableClipboardCodepointMap = .{},
 
+/// Allow "symbol-like" glyphs (codepoints in Arrows, Dingbats, Emoticons,
+/// Miscellaneous Symbols, Enclosed Alphanumerics, etc.) to extend into the
+/// adjacent cell when followed by whitespace.
+///
+/// This is on by default to give Nerd Font symbol glyphs room to breathe —
+/// many Nerd Font icons are designed slightly wider than a single cell, and
+/// the extra cell of whitespace is "free" rendering space. The trade-off is
+/// that symbol glyphs from fonts designed strictly to 1-cell metrics (e.g.
+/// custom patch fonts that bundle their own ⓘ ☑ ⊡) get scaled and
+/// re-positioned, producing visible 1-vs-2-cell drift depending on whether
+/// the next cell happens to be a space.
+///
+/// Set to `false` to disable the extension and force every symbol-like
+/// glyph to render strictly within its single cell.
+@"font-symbol-extend-to-whitespace": bool = true,
+
 /// Draw fonts with a thicker stroke, if supported.
 /// This is currently only supported on macOS.
 @"font-thicken": bool = false,

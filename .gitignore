@@ -29,3 +29,6 @@ glad.zip
 
 vgcore.*
 
+
+# Extracted zig dependency packages (created by some build flows)
+/zig-pkg/

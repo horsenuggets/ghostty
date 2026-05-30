@@ -250,10 +250,18 @@ pub fn isSymbol(cp: u21) bool {
 
 /// Returns the appropriate `constraint_width` for
 /// the provided cell when rendering its glyph(s).
+///
+/// `extend_to_whitespace` controls whether a symbol-like glyph is allowed
+/// to extend into a trailing whitespace cell. When false, symbol glyphs are
+/// always constrained to their natural cell count regardless of what
+/// follows them — this is what users with custom monospace symbol fonts
+/// (e.g. Gridfit Mono) want, since their ⓘ ☑ ⊡ glyphs are already drawn
+/// to 1-cell metrics and shouldn't visibly resize based on trailing context.
 pub fn constraintWidth(
     raw_slice: []const terminal.page.Cell,
     x: usize,
     cols: usize,
+    extend_to_whitespace: bool,
 ) u2 {
     const cell = raw_slice[x];
     const cp = cell.codepoint();
@@ -268,6 +276,10 @@ pub fn constraintWidth(
     // space, and if the previous glyph wasn't also a symbol. So if this
     // codepoint isn't a symbol then we can return the grid width.
     if (!isSymbol(cp)) return grid_width;
+
+    // The user has opted out of the symbol-to-whitespace extension. Keep
+    // every symbol-like glyph in its single cell regardless of context.
+    if (!extend_to_whitespace) return grid_width;
 
     // If we are at the end of the screen it must be constrained to one cell.
     if (x == cols - 1) return 1;
