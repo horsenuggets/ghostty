@@ -22,14 +22,11 @@ step: *Step,
 output: LazyPath,
 
 pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
-    const sdk = switch (opts.target.result.os.tag) {
-        .macos => "macosx",
-        .ios => switch (opts.target.result.abi) {
-            // The iOS simulator uses the same SDK for Metal as the device,
-            // but the minimum version tag causes different behaviors.
-            .simulator => "iphoneos",
-            else => "iphoneos",
-        },
+    // The wrappers in /usr/local/bin/{metal,metallib} hard-code the macosx
+    // SDK. iOS Metal compilation isn't supported by this local hack — if you
+    // need that path, revert this file to use `/usr/bin/xcrun -sdk <sdk>`.
+    _ = switch (opts.target.result.os.tag) {
+        .macos, .ios => {},
         else => return null,
     };
     const platform_version_arg = switch (opts.target.result.os.tag) {
@@ -55,7 +52,10 @@ pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
         b,
         b.fmt("metal {s}", .{opts.name}),
     );
-    run_ir.addArgs(&.{ "/usr/bin/xcrun", "-sdk", sdk, "metal", "-o" });
+    // Local build hack: keeping xcode-select on CommandLineTools so Zig can
+    // link, while pulling `metal` from a full Xcode install via wrappers in
+    // /usr/local/bin that set DEVELOPER_DIR for just the metal invocation.
+    run_ir.addArgs(&.{ "/usr/local/bin/metal", "-o" });
     const output_ir = run_ir.addOutputFileArg(b.fmt("{s}.ir", .{opts.name}));
     run_ir.addArgs(&.{"-c"});
     for (opts.sources) |source| run_ir.addFileArg(source);
@@ -70,7 +70,7 @@ pub fn create(b: *std.Build, opts: Options) ?*MetallibStep {
         b,
         b.fmt("metallib {s}", .{opts.name}),
     );
-    run_lib.addArgs(&.{ "/usr/bin/xcrun", "-sdk", sdk, "metallib", "-o" });
+    run_lib.addArgs(&.{ "/usr/local/bin/metallib", "-o" });
     const output_lib = run_lib.addOutputFileArg(b.fmt("{s}.metallib", .{opts.name}));
     run_lib.addFileArg(output_ir);
     run_lib.step.dependOn(&run_ir.step);

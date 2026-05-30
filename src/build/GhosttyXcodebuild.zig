@@ -63,8 +63,11 @@ pub fn init(
         step.has_side_effects = true;
         step.cwd = b.path("macos");
         step.env_map = env_map;
+        // /usr/local/bin/xcodebuild wrapper: sets DEVELOPER_DIR=Xcode for
+        // this invocation while leaving xcode-select on CommandLineTools
+        // for Zig's libc detection (Zig 0.15.2 vs Xcode 26.5 SDK link bug).
         step.addArgs(&.{
-            "xcodebuild",
+            "/usr/local/bin/xcodebuild",
             "-target",
             "Ghostty",
             "-configuration",
@@ -100,7 +103,7 @@ pub fn init(
         step.cwd = b.path("macos");
         step.env_map = env_map;
         step.addArgs(&.{
-            "xcodebuild",
+            "/usr/local/bin/xcodebuild",
             "test",
             "-scheme",
             "Ghostty",

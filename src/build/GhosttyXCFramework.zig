@@ -15,8 +15,14 @@ pub fn init(
     deps: *const SharedDeps,
     target: Target,
 ) !GhosttyXCFramework {
-    // Universal macOS build
-    const macos_universal = try GhosttyLib.initMacOSUniversal(b, deps);
+    // Universal macOS / iOS slices are only needed when shipping a universal
+    // xcframework. Building the iOS slices requires the iOS SDK, which
+    // CommandLineTools-only installs do not have. The .native branch skips
+    // them so local builds can succeed against CLT.
+    const macos_universal: ?GhosttyLib = if (target == .universal)
+        try GhosttyLib.initMacOSUniversal(b, deps)
+    else
+        null;
 
     // Native macOS build
     const macos_native = try GhosttyLib.initStatic(b, &try deps.retarget(
@@ -24,8 +30,7 @@ pub fn init(
         Config.genericMacOSTarget(b, null),
     ));
 
-    // iOS
-    const ios = try GhosttyLib.initStatic(b, &try deps.retarget(
+    const ios: ?GhosttyLib = if (target == .universal) try GhosttyLib.initStatic(b, &try deps.retarget(
         b,
         b.resolveTargetQuery(.{
             .cpu_arch = .aarch64,
@@ -33,25 +38,18 @@ pub fn init(
             .os_version_min = Config.osVersionMin(.ios),
             .abi = null,
         }),
-    ));
+    )) else null;
 
-    // iOS Simulator
-    const ios_sim = try GhosttyLib.initStatic(b, &try deps.retarget(
+    const ios_sim: ?GhosttyLib = if (target == .universal) try GhosttyLib.initStatic(b, &try deps.retarget(
         b,
         b.resolveTargetQuery(.{
             .cpu_arch = .aarch64,
             .os_tag = .ios,
             .os_version_min = Config.osVersionMin(.ios),
             .abi = .simulator,
-
-            // We force the Apple CPU model because the simulator
-            // doesn't support the generic CPU model as of Zig 0.14 due
-            // to missing "altnzcv" instructions, which is false. This
-            // surely can't be right but we can fix this if/when we get
-            // back to running simulator builds.
             .cpu_model = .{ .explicit = &std.Target.aarch64.cpu.apple_a17 },
         }),
-    ));
+    )) else null;
 
     // Generate a headers directory with only ghostty.h and the module
     // map. We can't use include/ directly because it also contains the
@@ -71,19 +69,19 @@ pub fn init(
         .libraries = switch (target) {
             .universal => &.{
                 .{
-                    .library = macos_universal.output,
+                    .library = macos_universal.?.output,
                     .headers = headers,
-                    .dsym = macos_universal.dsym,
+                    .dsym = macos_universal.?.dsym,
                 },
                 .{
-                    .library = ios.output,
+                    .library = ios.?.output,
                     .headers = headers,
-                    .dsym = ios.dsym,
+                    .dsym = ios.?.dsym,
                 },
                 .{
-                    .library = ios_sim.output,
+                    .library = ios_sim.?.output,
                     .headers = headers,
-                    .dsym = ios_sim.dsym,
+                    .dsym = ios_sim.?.dsym,
                 },
             },
 

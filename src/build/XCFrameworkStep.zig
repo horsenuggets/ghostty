@@ -49,7 +49,11 @@ pub fn create(b: *std.Build, opts: Options) *XCFrameworkStep {
     const run_create = run: {
         const run = RunStep.create(b, b.fmt("xcframework {s}", .{opts.name}));
         run.has_side_effects = true;
-        run.addArgs(&.{ "xcodebuild", "-create-xcframework" });
+        // Local build hack: keep xcode-select on CommandLineTools so Zig's
+        // libc detection works; route xcodebuild through a wrapper at
+        // /usr/local/bin/xcodebuild that sets DEVELOPER_DIR=Xcode for just
+        // this invocation. Same pattern as the metal/metallib wrappers.
+        run.addArgs(&.{ "/usr/local/bin/xcodebuild", "-create-xcframework" });
         for (opts.libraries) |lib| {
             run.addArg("-library");
             run.addFileArg(lib.library);
