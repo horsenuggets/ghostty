@@ -26,8 +26,11 @@ pub const Location = enum {
     ) error{OutOfMemory}!?[]const u8 {
         return switch (self) {
             .user => user: {
+                // Ghostty2 fork: themes live under ~/.config/ghostty2/themes
+                // so the fork can carry its own theme overrides without
+                // touching an upstream Ghostty's themes directory.
                 const subdir = std.fs.path.join(arena_alloc, &.{
-                    "ghostty", "themes",
+                    "ghostty2", "themes",
                 }) catch return error.OutOfMemory;
 
                 break :user internal_os.xdg.config(

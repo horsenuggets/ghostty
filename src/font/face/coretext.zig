@@ -621,12 +621,14 @@ pub const Face = struct {
                 const src_h: usize = @intCast(decoded.height);
                 var dst_row: usize = 0;
                 while (dst_row < dst_h) : (dst_row += 1) {
-                    // CG bitmap contexts treat buffer row 0 as the BOTTOM
-                    // of the image (y-up convention); wuffs decodes PNGs
-                    // top-down. Flip so the PNG's top row lands at the
-                    // top of the rendered image.
-                    const flipped_row = dst_h - 1 - dst_row;
-                    const src_y = (flipped_row * src_h) / dst_h;
+                    // Both wuffs's PNG decode output and the CG bitmap
+                    // we're writing into are top-down in memory in this
+                    // particular pipeline (BGRA32 + premultiplied first +
+                    // 32-little byte order), so no Y flip is needed. The
+                    // Apple Color Emoji path verifies this empirically:
+                    // CT writes into the same buffer and the result is
+                    // right-side-up on screen.
+                    const src_y = (dst_row * src_h) / dst_h;
                     var dst_col: usize = 0;
                     while (dst_col < dst_w) : (dst_col += 1) {
                         const src_x = (dst_col * src_w) / dst_w;
