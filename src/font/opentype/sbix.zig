@@ -78,19 +78,64 @@ pub const SBIX = struct {
     /// the color rasterization path. Glyphs without bitmaps fall through to
     /// `glyf`/`CFF ` outlines and should be drawn as monochrome text.
     pub fn hasGlyph(self: SBIX, glyph_id: u16) bool {
-        if (glyph_id >= self.num_glyphs) return false;
+        return self.glyphOffsets(glyph_id) != null;
+    }
 
-        // Read offsets[gid] and offsets[gid + 1] as big-endian u32. A glyph
-        // has a bitmap iff the offsets differ (i.e. the data span has
-        // non-zero length).
+    /// A single bitmap entry inside the first strike.
+    pub const GlyphEntry = struct {
+        /// The 4-byte graphic format tag, e.g. "png ".
+        graphic_type: [4]u8,
+        /// originOffsetX in font units, signed 16-bit.
+        origin_offset_x: i16,
+        /// originOffsetY in font units, signed 16-bit.
+        origin_offset_y: i16,
+        /// The raw bitmap bytes (e.g. PNG data) for this glyph.
+        data: []const u8,
+    };
+
+    /// Resolve a glyph ID to its raw bitmap entry inside the first strike.
+    /// Returns null if the glyph has no bitmap in this strike. We sample
+    /// only the first strike — every strike in a well-formed sbix font
+    /// agrees on which glyphs have data, and we let the renderer scale
+    /// the chosen bitmap to whatever ppem the context needs.
+    pub fn getGlyphEntry(self: SBIX, glyph_id: u16) ?GlyphEntry {
+        const range = self.glyphOffsets(glyph_id) orelse return null;
+
+        // strike_offset + range.start points at this glyph's per-glyph
+        // header: originOffsetX (i16), originOffsetY (i16), graphicType
+        // (uint32), then the data bytes.
+        const strike_pos = self.offsets_pos - 4;
+        const glyph_pos = strike_pos + range.start;
+        const header_size: usize = 2 + 2 + 4;
+        if (glyph_pos + header_size > self.data.len) return null;
+
+        const bytes = self.data[glyph_pos..];
+        const origin_offset_x = std.mem.readInt(i16, bytes[0..2], .big);
+        const origin_offset_y = std.mem.readInt(i16, bytes[2..4], .big);
+        var graphic_type: [4]u8 = undefined;
+        @memcpy(&graphic_type, bytes[4..8]);
+
+        const data_end = strike_pos + range.end;
+        if (data_end > self.data.len) return null;
+
+        return .{
+            .graphic_type = graphic_type,
+            .origin_offset_x = origin_offset_x,
+            .origin_offset_y = origin_offset_y,
+            .data = self.data[glyph_pos + header_size .. data_end],
+        };
+    }
+
+    fn glyphOffsets(self: SBIX, glyph_id: u16) ?struct { start: u32, end: u32 } {
+        if (glyph_id >= self.num_glyphs) return null;
         const entry_size: usize = @sizeOf(u32);
         const start_pos = self.offsets_pos + @as(usize, glyph_id) * entry_size;
         const end_pos = start_pos + entry_size;
-        if (end_pos + entry_size > self.data.len) return false;
-
+        if (end_pos + entry_size > self.data.len) return null;
         const start = std.mem.readInt(u32, self.data[start_pos..][0..4], .big);
         const end = std.mem.readInt(u32, self.data[end_pos..][0..4], .big);
-        return end > start;
+        if (end <= start) return null;
+        return .{ .start = start, .end = end };
     }
 };
 

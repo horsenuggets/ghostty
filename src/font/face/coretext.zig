@@ -302,6 +302,34 @@ pub const Face = struct {
 
         // Determine whether this is a color glyph.
         const is_color = self.isColorGlyph(glyph_index);
+
+        // For sbix bitmap glyphs we expand the rect to the font's full em
+        // box: getBoundingRectsForGlyphs returns the glyf-outline bbox even
+        // when the bitmap content extends further (e.g. our ✅ has a small
+        // 24x24 glyf silhouette but a full-em-box PNG that needs to be
+        // drawn into a canvas large enough to receive it). Without this,
+        // CoreText still draws the bitmap, but our canvas is sized to the
+        // outline and clips most of the visible content — net result is an
+        // invisible glyph in the atlas.
+        const is_sbix_for_this_glyph = is_color and sbix: {
+            const state = self.color orelse break :sbix false;
+            const table = state.sbix orelse break :sbix false;
+            const glyph_u16 = std.math.cast(u16, glyph_index) orelse break :sbix false;
+            break :sbix table.hasGlyph(glyph_u16);
+        };
+        if (is_sbix_for_this_glyph) {
+            const ascent = self.font.getAscent();
+            const descent = self.font.getDescent();
+            // CT advance returns size in points at the requested font size.
+            var advance_buf: [1]macos.graphics.Size = undefined;
+            _ = self.font.getAdvancesForGlyphs(.horizontal, &glyphs, &advance_buf);
+            const advance = advance_buf[0].width;
+            rect.origin.x = 0;
+            rect.origin.y = -descent;
+            rect.size.width = advance;
+            rect.size.height = ascent + descent;
+        }
+
         // And whether THIS glyph is a bitmap (sbix). We check the specific
         // glyph, not just the table's presence — mixed fonts ship sbix data
         // for emoji glyphs alongside outline-only monochrome glyphs.
@@ -546,10 +574,83 @@ pub const Face = struct {
         // glyph is drawn at exactly [0, 0], which is then offset to
         // the appropriate fractional position by the translation we
         // did before scaling.
+        // Try CoreText's native drawGlyphs first. For system fonts like
+        // Apple Color Emoji this picks the right sbix strike, scales it
+        // smoothly, and writes properly-oriented pixels into the buffer.
+        // We can't unconditionally use it though: some custom sbix fonts
+        // (e.g. Gridfit Mono) ship valid bitmap data that CoreText
+        // silently refuses to render — even with format-12 cmap, em-box
+        // bbox extensions, and "Emoji" in the family name. For those we
+        // fall back to decoding the PNG ourselves below.
         self.font.drawGlyphs(&glyphs, &.{.{
             .x = -rect.origin.x,
             .y = -rect.origin.y,
         }}, ctx);
+
+        const sbix_handled_by_ct = blk: {
+            if (!is_sbix_for_this_glyph) break :blk true;
+            // Cheap scan for any non-zero alpha pixel — if CT wrote anything
+            // we trust it. Alpha is the 4th byte in BGRA premultiplied first.
+            var i: usize = 3;
+            while (i < buf.len) : (i += 4) {
+                if (buf[i] != 0) break :blk true;
+            }
+            break :blk false;
+        };
+
+        if (!sbix_handled_by_ct) {
+            // CoreText left the buffer empty. Decode the sbix PNG manually
+            // and blit it into the buffer.
+            decode_blk: {
+                const state = self.color orelse break :decode_blk;
+                const sbix_tbl = state.sbix orelse break :decode_blk;
+                const glyph_u16 = std.math.cast(u16, glyph_index) orelse break :decode_blk;
+                const entry = sbix_tbl.getGlyphEntry(glyph_u16) orelse break :decode_blk;
+                if (!std.mem.eql(u8, &entry.graphic_type, "png ")) break :decode_blk;
+
+                const wuffs = @import("wuffs");
+                const decoded = wuffs.png.decode(alloc, entry.data) catch break :decode_blk;
+                defer alloc.free(decoded.data);
+
+                // Blit decoded RGBA into the BGRA premultiplied buffer with
+                // nearest-neighbor scaling. The buffer is `px_width × px_height`
+                // BGRA32. Decoded image is `decoded.width × decoded.height` RGBA32.
+                const dst_w: usize = @intCast(px_width);
+                const dst_h: usize = @intCast(px_height);
+                const src_w: usize = @intCast(decoded.width);
+                const src_h: usize = @intCast(decoded.height);
+                var dst_row: usize = 0;
+                while (dst_row < dst_h) : (dst_row += 1) {
+                    // CG bitmap contexts treat buffer row 0 as the BOTTOM
+                    // of the image (y-up convention); wuffs decodes PNGs
+                    // top-down. Flip so the PNG's top row lands at the
+                    // top of the rendered image.
+                    const flipped_row = dst_h - 1 - dst_row;
+                    const src_y = (flipped_row * src_h) / dst_h;
+                    var dst_col: usize = 0;
+                    while (dst_col < dst_w) : (dst_col += 1) {
+                        const src_x = (dst_col * src_w) / dst_w;
+                        const sp = (src_y * src_w + src_x) * 4;
+                        const r = decoded.data[sp + 0];
+                        const g = decoded.data[sp + 1];
+                        const b = decoded.data[sp + 2];
+                        const a = decoded.data[sp + 3];
+                        // Premultiply
+                        const pr: u8 = @intCast((@as(u16, r) * a) / 255);
+                        const pg: u8 = @intCast((@as(u16, g) * a) / 255);
+                        const pb: u8 = @intCast((@as(u16, b) * a) / 255);
+                        // BGRA in 32-bit-little-endian + alpha-premultiplied-first
+                        // means the byte order on disk is [B, G, R, A].
+                        const dp = (dst_row * dst_w + dst_col) * 4;
+                        buf[dp + 0] = pb;
+                        buf[dp + 1] = pg;
+                        buf[dp + 2] = pr;
+                        buf[dp + 3] = a;
+                    }
+                }
+            }
+        }
+
 
         // Write our rasterized glyph to the atlas.
         const region = try atlas.reserve(alloc, px_width, px_height);
