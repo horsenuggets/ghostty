@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Ghostty2 fork: override the menu-bar name. Without this Xcode
+	     defaults CFBundleName to PRODUCT_NAME = $(TARGET_NAME) = "Ghostty",
+	     and the macOS application menu shows "Ghostty" instead of the
+	     fork's "Ghostty2" branding even when CFBundleDisplayName is set. -->
+	<key>CFBundleName</key>
+	<string>Ghostty2</string>
 	<key>NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac</key>
 	<true/>
 	<key>NSDockTilePlugIn</key>
