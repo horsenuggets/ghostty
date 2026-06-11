@@ -28,9 +28,11 @@ pub const Location = enum {
             .user => user: {
                 // Ghostty2 fork: themes live under ~/.config/ghostty2/themes
                 // so the fork can carry its own theme overrides without
-                // touching an upstream Ghostty's themes directory.
+                // touching an upstream Ghostty's themes directory. The Debug
+                // bundle is routed to ~/.config/ghostty2-debug/themes so it
+                // doesn't share theme overrides with production.
                 const subdir = std.fs.path.join(arena_alloc, &.{
-                    "ghostty2", "themes",
+                    internal_os.macos.configDirName(), "themes",
                 }) catch return error.OutOfMemory;
 
                 break :user internal_os.xdg.config(

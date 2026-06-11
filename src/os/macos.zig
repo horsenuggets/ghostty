@@ -5,6 +5,31 @@ const assert = @import("../quirks.zig").inlineAssert;
 const objc = @import("objc");
 const Allocator = std.mem.Allocator;
 
+/// Returns true if the running app's bundle identifier ends with ".debug",
+/// which Ghostty2 uses as the marker for the side-by-side Debug flavor
+/// (`com.mitchellh.ghostty.debug`). Callers use this to route per-app
+/// state — config directory, theme overrides, etc. — to a distinct
+/// `~/.config/ghostty2-debug/` tree so the Debug app doesn't share state
+/// with the production Ghostty2 install.
+pub fn isDebugBundle() bool {
+    if (comptime !builtin.target.os.tag.isDarwin()) return false;
+    const NSBundle = objc.getClass("NSBundle") orelse return false;
+    const main = NSBundle.msgSend(objc.Object, objc.sel("mainBundle"), .{});
+    if (main.value == null) return false;
+    const id_obj = main.msgSend(objc.Object, objc.sel("bundleIdentifier"), .{});
+    if (id_obj.value == null) return false;
+    const c_str = id_obj.getProperty(?[*:0]const u8, "UTF8String") orelse return false;
+    const id = std.mem.sliceTo(c_str, 0);
+    return std.mem.endsWith(u8, id, ".debug");
+}
+
+/// Returns the XDG config sub-directory name for this build flavor:
+/// `ghostty2-debug` for the Debug bundle, `ghostty2` otherwise. The returned
+/// slice has static lifetime.
+pub fn configDirName() []const u8 {
+    return if (isDebugBundle()) "ghostty2-debug" else "ghostty2";
+}
+
 /// Verifies that the running macOS system version is at least the given version.
 pub fn isAtLeastVersion(major: i64, minor: i64, patch: i64) bool {
     comptime assert(builtin.target.os.tag.isDarwin());
