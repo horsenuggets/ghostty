@@ -15,38 +15,38 @@ const log = std.log.scoped(.config);
 /// `~/.config/ghostty2-debug/` instead so it can be iterated on without
 /// touching production config.
 pub fn defaultXdgPath(alloc: Allocator) ![]const u8 {
-    const subdir = try std.fmt.allocPrint(
-        alloc,
-        "{s}/config.ghostty",
-        .{configDirName()},
-    );
-    defer alloc.free(subdir);
-    return try internal_os.xdg.config(alloc, .{ .subdir = subdir });
+    return try internal_os.xdg.config(alloc, .{ .subdir = defaultXdgSubdir() });
 }
 
 /// Ghostty <1.3.0 default path for the XDG home configuration file.
 /// Returned value must be freed by the caller.
 pub fn legacyDefaultXdgPath(alloc: Allocator) ![]const u8 {
-    const subdir = try std.fmt.allocPrint(
-        alloc,
-        "{s}/config",
-        .{configDirName()},
-    );
-    defer alloc.free(subdir);
-    return try internal_os.xdg.config(alloc, .{ .subdir = subdir });
+    return try internal_os.xdg.config(alloc, .{ .subdir = legacyDefaultXdgSubdir() });
 }
 
-/// The Ghostty2 XDG sub-directory name to use for this build flavor:
-/// `ghostty2-debug` on the macOS Debug bundle, `ghostty2` otherwise.
+/// The XDG sub-directory ("<base>/config.ghostty") for `defaultXdgPath`.
+/// All possible return values are string literals so the caller never
+/// allocates to form the subdir.
 ///
 /// The Darwin guard is comptime so that on Linux / Windows / FreeBSD this
 /// resolves to a string literal without ever referencing `os/macos.zig`,
 /// which top-level-imports `objc` (a Darwin-only dependency).
-fn configDirName() []const u8 {
-    return if (comptime builtin.target.os.tag.isDarwin())
-        internal_os.macos.configDirName()
+fn defaultXdgSubdir() []const u8 {
+    if (comptime !builtin.target.os.tag.isDarwin()) return "ghostty2/config.ghostty";
+    return if (internal_os.macos.isDebugBundle())
+        "ghostty2-debug/config.ghostty"
     else
-        "ghostty2";
+        "ghostty2/config.ghostty";
+}
+
+/// The XDG sub-directory ("<base>/config") for `legacyDefaultXdgPath`.
+/// Same allocation-free strategy as `defaultXdgSubdir`.
+fn legacyDefaultXdgSubdir() []const u8 {
+    if (comptime !builtin.target.os.tag.isDarwin()) return "ghostty2/config";
+    return if (internal_os.macos.isDebugBundle())
+        "ghostty2-debug/config"
+    else
+        "ghostty2/config";
 }
 
 /// Preferred default path for the XDG home configuration file.
