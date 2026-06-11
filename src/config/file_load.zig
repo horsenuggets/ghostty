@@ -11,20 +11,42 @@ const log = std.log.scoped(.config);
 ///
 /// Note: this fork (Ghostty2) reads from `~/.config/ghostty2/` so it can
 /// coexist with an upstream Ghostty install without sharing config files.
+/// The Debug bundle (`com.mitchellh.ghostty.debug`) is routed to
+/// `~/.config/ghostty2-debug/` instead so it can be iterated on without
+/// touching production config.
 pub fn defaultXdgPath(alloc: Allocator) ![]const u8 {
-    return try internal_os.xdg.config(
-        alloc,
-        .{ .subdir = "ghostty2/config.ghostty" },
-    );
+    return try internal_os.xdg.config(alloc, .{ .subdir = defaultXdgSubdir() });
 }
 
 /// Ghostty <1.3.0 default path for the XDG home configuration file.
 /// Returned value must be freed by the caller.
 pub fn legacyDefaultXdgPath(alloc: Allocator) ![]const u8 {
-    return try internal_os.xdg.config(
-        alloc,
-        .{ .subdir = "ghostty2/config" },
-    );
+    return try internal_os.xdg.config(alloc, .{ .subdir = legacyDefaultXdgSubdir() });
+}
+
+/// The XDG sub-directory ("<base>/config.ghostty") for `defaultXdgPath`.
+/// All possible return values are string literals so the caller never
+/// allocates to form the subdir.
+///
+/// The Darwin guard is comptime so that on Linux / Windows / FreeBSD this
+/// resolves to a string literal without ever referencing `os/macos.zig`,
+/// which top-level-imports `objc` (a Darwin-only dependency).
+fn defaultXdgSubdir() []const u8 {
+    if (comptime !builtin.target.os.tag.isDarwin()) return "ghostty2/config.ghostty";
+    return if (internal_os.macos.isDebugBundle())
+        "ghostty2-debug/config.ghostty"
+    else
+        "ghostty2/config.ghostty";
+}
+
+/// The XDG sub-directory ("<base>/config") for `legacyDefaultXdgPath`.
+/// Same allocation-free strategy as `defaultXdgSubdir`.
+fn legacyDefaultXdgSubdir() []const u8 {
+    if (comptime !builtin.target.os.tag.isDarwin()) return "ghostty2/config";
+    return if (internal_os.macos.isDebugBundle())
+        "ghostty2-debug/config"
+    else
+        "ghostty2/config";
 }
 
 /// Preferred default path for the XDG home configuration file.

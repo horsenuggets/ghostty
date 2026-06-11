@@ -5,6 +5,31 @@ const assert = @import("../quirks.zig").inlineAssert;
 const objc = @import("objc");
 const Allocator = std.mem.Allocator;
 
+/// Returns true if the running app's bundle identifier ends with ".debug",
+/// which Ghostty2 uses as the marker for the side-by-side Debug flavor
+/// (`com.mitchellh.ghostty.debug`). Callers use this to route per-app
+/// state — config directory, theme overrides, etc. — to a distinct
+/// `~/.config/ghostty2-debug/` tree so the Debug app doesn't share state
+/// with the production Ghostty2 install.
+pub fn isDebugBundle() bool {
+    if (comptime !builtin.target.os.tag.isDarwin()) return false;
+    const NSBundle = objc.getClass("NSBundle") orelse return false;
+    const main = NSBundle.msgSend(objc.Object, objc.sel("mainBundle"), .{});
+    if (main.value == null) return false;
+    const id_obj = main.msgSend(objc.Object, objc.sel("bundleIdentifier"), .{});
+    if (id_obj.value == null) return false;
+    const c_str = id_obj.getProperty(?[*:0]const u8, "UTF8String") orelse return false;
+    const id = std.mem.sliceTo(c_str, 0);
+    return std.mem.endsWith(u8, id, ".debug");
+}
+
+/// Returns the XDG config sub-directory name for this build flavor:
+/// `ghostty2-debug` for the Debug bundle, `ghostty2` otherwise. The returned
+/// slice has static lifetime.
+pub fn configDirName() []const u8 {
+    return if (isDebugBundle()) "ghostty2-debug" else "ghostty2";
+}
+
 /// Verifies that the running macOS system version is at least the given version.
 pub fn isAtLeastVersion(major: i64, minor: i64, patch: i64) bool {
     comptime assert(builtin.target.os.tag.isDarwin());
@@ -20,7 +45,9 @@ pub const AppSupportDirError = Allocator.Error || error{AppleAPIFailed};
 
 /// Return the path to the application support directory for Ghostty
 /// with the given sub path joined. This allocates the result using the
-/// given allocator.
+/// given allocator. The Debug bundle is namespaced under
+/// `com.mitchellh.ghostty.debug` so it doesn't share Application Support
+/// state with the production install.
 pub fn appSupportDir(
     alloc: Allocator,
     sub_path: []const u8,
@@ -28,14 +55,15 @@ pub fn appSupportDir(
     return try commonDir(
         alloc,
         .NSApplicationSupportDirectory,
-        &.{ build_config.bundle_id, sub_path },
+        &.{ bundleNamespace(), sub_path },
     );
 }
 
 pub const CacheDirError = Allocator.Error || error{AppleAPIFailed};
 
 /// Return the path to the system cache directory with the given sub path joined.
-/// This allocates the result using the given allocator.
+/// This allocates the result using the given allocator. The Debug bundle is
+/// namespaced separately for the same reason as `appSupportDir`.
 pub fn cacheDir(
     alloc: Allocator,
     sub_path: []const u8,
@@ -43,8 +71,16 @@ pub fn cacheDir(
     return try commonDir(
         alloc,
         .NSCachesDirectory,
-        &.{ build_config.bundle_id, sub_path },
+        &.{ bundleNamespace(), sub_path },
     );
+}
+
+/// Returns the bundle-id-style namespace string used for per-app state
+/// directories (Application Support, Caches). Production returns
+/// `build_config.bundle_id` directly; the Debug bundle appends `.debug` so
+/// the two installs never share state.
+fn bundleNamespace() []const u8 {
+    return if (isDebugBundle()) build_config.bundle_id ++ ".debug" else build_config.bundle_id;
 }
 
 pub const SetQosClassError = error{
@@ -155,12 +191,18 @@ test "cacheDir paths" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
+    // Assert against bundleNamespace() rather than build_config.bundle_id
+    // directly so the assertions stay valid even if the test binary somehow
+    // resolves as the Debug bundle (where the namespace is
+    // "<bundle_id>.debug" instead of "<bundle_id>").
+    const namespace = bundleNamespace();
+
     // Test base path
     {
         const cache_path = try cacheDir(alloc, "");
         defer alloc.free(cache_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, "Caches") != null);
-        try testing.expect(std.mem.indexOf(u8, cache_path, build_config.bundle_id) != null);
+        try testing.expect(std.mem.indexOf(u8, cache_path, namespace) != null);
     }
 
     // Test with subdir
@@ -168,10 +210,28 @@ test "cacheDir paths" {
         const cache_path = try cacheDir(alloc, "test");
         defer alloc.free(cache_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, "Caches") != null);
-        try testing.expect(std.mem.indexOf(u8, cache_path, build_config.bundle_id) != null);
+        try testing.expect(std.mem.indexOf(u8, cache_path, namespace) != null);
 
-        const bundle_path = try std.fmt.allocPrint(alloc, "{s}/test", .{build_config.bundle_id});
+        const bundle_path = try std.fmt.allocPrint(alloc, "{s}/test", .{namespace});
         defer alloc.free(bundle_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, bundle_path) != null);
     }
+}
+
+test "isDebugBundle and configDirName outside an app bundle" {
+    if (!builtin.target.os.tag.isDarwin()) {
+        try @import("std").testing.expectEqual(false, isDebugBundle());
+        try @import("std").testing.expectEqualStrings("ghostty2", configDirName());
+        try @import("std").testing.expectEqualStrings(build_config.bundle_id, bundleNamespace());
+        return;
+    }
+
+    // Inside `zig build test` the host process is the test runner binary,
+    // not the Ghostty.app bundle, so the main bundle's identifier does not
+    // end in ".debug". Pin that: both helpers must report the production
+    // shape and never crash when the bundle/identifier APIs return nil.
+    const testing = @import("std").testing;
+    try testing.expectEqual(false, isDebugBundle());
+    try testing.expectEqualStrings("ghostty2", configDirName());
+    try testing.expectEqualStrings(build_config.bundle_id, bundleNamespace());
 }
