@@ -45,7 +45,9 @@ pub const AppSupportDirError = Allocator.Error || error{AppleAPIFailed};
 
 /// Return the path to the application support directory for Ghostty
 /// with the given sub path joined. This allocates the result using the
-/// given allocator.
+/// given allocator. The Debug bundle is namespaced under
+/// `com.mitchellh.ghostty.debug` so it doesn't share Application Support
+/// state with the production install.
 pub fn appSupportDir(
     alloc: Allocator,
     sub_path: []const u8,
@@ -53,14 +55,15 @@ pub fn appSupportDir(
     return try commonDir(
         alloc,
         .NSApplicationSupportDirectory,
-        &.{ build_config.bundle_id, sub_path },
+        &.{ bundleNamespace(), sub_path },
     );
 }
 
 pub const CacheDirError = Allocator.Error || error{AppleAPIFailed};
 
 /// Return the path to the system cache directory with the given sub path joined.
-/// This allocates the result using the given allocator.
+/// This allocates the result using the given allocator. The Debug bundle is
+/// namespaced separately for the same reason as `appSupportDir`.
 pub fn cacheDir(
     alloc: Allocator,
     sub_path: []const u8,
@@ -68,8 +71,16 @@ pub fn cacheDir(
     return try commonDir(
         alloc,
         .NSCachesDirectory,
-        &.{ build_config.bundle_id, sub_path },
+        &.{ bundleNamespace(), sub_path },
     );
+}
+
+/// Returns the bundle-id-style namespace string used for per-app state
+/// directories (Application Support, Caches). Production returns
+/// `build_config.bundle_id` directly; the Debug bundle appends `.debug` so
+/// the two installs never share state.
+fn bundleNamespace() []const u8 {
+    return if (isDebugBundle()) build_config.bundle_id ++ ".debug" else build_config.bundle_id;
 }
 
 pub const SetQosClassError = error{
@@ -199,4 +210,22 @@ test "cacheDir paths" {
         defer alloc.free(bundle_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, bundle_path) != null);
     }
+}
+
+test "isDebugBundle and configDirName outside an app bundle" {
+    if (!builtin.target.os.tag.isDarwin()) {
+        try @import("std").testing.expectEqual(false, isDebugBundle());
+        try @import("std").testing.expectEqualStrings("ghostty2", configDirName());
+        try @import("std").testing.expectEqualStrings(build_config.bundle_id, bundleNamespace());
+        return;
+    }
+
+    // Inside `zig build test` the host process is the test runner binary,
+    // not the Ghostty.app bundle, so the main bundle's identifier does not
+    // end in ".debug". Pin that: both helpers must report the production
+    // shape and never crash when the bundle/identifier APIs return nil.
+    const testing = @import("std").testing;
+    try testing.expectEqual(false, isDebugBundle());
+    try testing.expectEqualStrings("ghostty2", configDirName());
+    try testing.expectEqualStrings(build_config.bundle_id, bundleNamespace());
 }
