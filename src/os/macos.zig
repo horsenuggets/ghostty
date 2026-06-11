@@ -191,12 +191,18 @@ test "cacheDir paths" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
+    // Assert against bundleNamespace() rather than build_config.bundle_id
+    // directly so the assertions stay valid even if the test binary somehow
+    // resolves as the Debug bundle (where the namespace is
+    // "<bundle_id>.debug" instead of "<bundle_id>").
+    const namespace = bundleNamespace();
+
     // Test base path
     {
         const cache_path = try cacheDir(alloc, "");
         defer alloc.free(cache_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, "Caches") != null);
-        try testing.expect(std.mem.indexOf(u8, cache_path, build_config.bundle_id) != null);
+        try testing.expect(std.mem.indexOf(u8, cache_path, namespace) != null);
     }
 
     // Test with subdir
@@ -204,9 +210,9 @@ test "cacheDir paths" {
         const cache_path = try cacheDir(alloc, "test");
         defer alloc.free(cache_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, "Caches") != null);
-        try testing.expect(std.mem.indexOf(u8, cache_path, build_config.bundle_id) != null);
+        try testing.expect(std.mem.indexOf(u8, cache_path, namespace) != null);
 
-        const bundle_path = try std.fmt.allocPrint(alloc, "{s}/test", .{build_config.bundle_id});
+        const bundle_path = try std.fmt.allocPrint(alloc, "{s}/test", .{namespace});
         defer alloc.free(bundle_path);
         try testing.expect(std.mem.indexOf(u8, cache_path, bundle_path) != null);
     }
